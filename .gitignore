@@ -1,0 +1,68 @@
+# Secrets & local config
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Logs & local runtime files
+*.log
+myapp.log
+logs/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local data (not for repo)
+data/
+*.csv
+*.parquet
+*.jsonl
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Azure / local credentials
+*.pem
+*.key
+credentials.json
+secrets.json
