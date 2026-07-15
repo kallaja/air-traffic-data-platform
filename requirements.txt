@@ -1,0 +1,8 @@
+# Azure
+azure-identity==1.25.3
+azure-storage-blob==12.30.0
+
+# Ingestion / APIs
+python-dotenv==1.2.2
+requests==2.34.2
+opensky-api @ git+https://github.com/openskynetwork/opensky-api.git@458997ee781b6cc3c8c90b2f6e8c7dedd9404d4e#subdirectory=python
