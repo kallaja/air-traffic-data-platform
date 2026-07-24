@@ -21,6 +21,11 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
+# Quiet Azure SDK HTTP noise (Request URL / headers / response dump).
+logging.getLogger("azure").setLevel(logging.WARNING)
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
+    logging.WARNING
+)
 logger = logging.getLogger(__name__)
 
 # Continental Europe (min_lat, max_lat, min_lon, max_lon)
