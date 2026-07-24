@@ -1,0 +1,20 @@
+.git*
+.vscode
+.venv
+venv
+__pycache__
+*.pyc
+.python_packages
+.env
+.env.*
+!.env.example
+local.settings.json
+main_test.py
+myapp.log
+*.log
+not used for now
+docs
+tests
+.pytest_cache
+.mypy_cache
+.ruff_cache
