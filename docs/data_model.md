@@ -2,7 +2,15 @@
 
 ## Overview
 
-Air traffic platform: bronze (ADLS) → silver (Databricks SQL) → gold
+Air traffic platform:
+
+```text
+bronze (ADLS JSON)
+  → silver (Databricks SQL table: silver.opensky_states)
+  → gold (planned)
+```
+
+Classic DWH analogy: ADLS bronze ≈ landing; `silver.opensky_states` ≈ cleaned core table; gold ≈ marts for Power BI.
 
 ## Current sources
 
@@ -11,18 +19,22 @@ Air traffic platform: bronze (ADLS) → silver (Databricks SQL) → gold
 
 ## Grain (OpenSky silver)
 
-**1 row = one aircraft (`icao24`) in one API snapshot** (`time` / one ingestion run).
+**1 row = one aircraft (`icao24`) in one API snapshot** (`time` from the bronze file / one ingestion run).
+
+Business key (MVP): `(snapshot_time_unix, icao24)`.
 
 ## Layers
 
-### Bronze
+### Bronze (ADLS)
 
-- Raw JSON from OpenSky (response object as stored by ingestion).
+- Raw JSON from OpenSky (as written by `ingest_opensky_states.py`).
 - Path:
 
 ```text
 bronze/source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_YYYYMMDDTHHMMSSZ.json
 ```
+
+Silver does **not** write back to ADLS in this MVP. Cleaned data lives as a **Databricks table**.
 
 #### Response-level fields (file root)
 
@@ -54,63 +66,74 @@ Source: OpenSky REST API — All State Vectors response.
 | 14 | `squawk` | string | yes | Transponder code (squawk). |
 | 15 | `spi` | boolean | no* | Whether flight status indicates Special Purpose Indicator. |
 | 16 | `position_source` | int | no* | Origin of position: `0` = ADS-B, `1` = ASTERIX, `2` = MLAT, `3` = FLARM. |
-| 17 | `category` | int | no* | Aircraft category (0–20). See OpenSky docs (0 = no information, 2 = Light, 6 = Heavy, 8 = Rotorcraft, …). |
+| 17 | `category` | int | no* | Aircraft category (0–20). See OpenSky docs. |
 
 \*Usually present in practice; treat carefully in silver if null appears.
 
-### Silver: `silver.opensky_states`
+### Silver: `silver.opensky_states` (implemented)
 
-Flattened state vectors + pipeline context. One row per aircraft per snapshot.
+Built in Databricks SQL from bronze via `read_files` + `LATERAL VIEW explode(states)`.
 
-| Column | Type (SQL) | Source field | Nullable | Description |
-|--------|------------|--------------|----------|-------------|
-| `run_id` | STRING | metadata.`run_id` | no | Ingestion run UUID. |
-| `load_datetime_utc` | TIMESTAMP | metadata.`load_datetime_utc` | no | When the ingestion job started (UTC). |
-| `snapshot_time_utc` | TIMESTAMP | root.`time` | no | API snapshot time (`time`) converted from Unix seconds to UTC timestamp. |
-| `snapshot_time_unix` | BIGINT | root.`time` | no | Raw Unix `time` from the bronze file. |
-| `icao24` | STRING | `icao24` | no | ICAO 24-bit address. |
-| `callsign` | STRING | `callsign` | yes | Callsign; in silver: `TRIM(callsign)`, empty string → null. |
-| `origin_country` | STRING | `origin_country` | yes | Country inferred from ICAO address. |
-| `time_position_utc` | TIMESTAMP | `time_position` | yes | Last position update (Unix → UTC). |
-| `last_contact_utc` | TIMESTAMP | `last_contact` | yes | Last contact (Unix → UTC). |
-| `longitude` | DOUBLE | `longitude` | yes | WGS-84 longitude (degrees). |
-| `latitude` | DOUBLE | `latitude` | yes | WGS-84 latitude (degrees). |
-| `baro_altitude_m` | DOUBLE | `baro_altitude` | yes | Barometric altitude (meters). |
-| `on_ground` | BOOLEAN | `on_ground` | yes | Surface / on-ground flag. |
-| `velocity_ms` | DOUBLE | `velocity` | yes | Ground speed (m/s). |
-| `true_track_deg` | DOUBLE | `true_track` | yes | Track angle degrees from north. |
-| `vertical_rate_ms` | DOUBLE | `vertical_rate` | yes | Climb/descent rate (m/s). |
-| `sensors` | STRING | `sensors` | yes | Serialized sensor IDs if present; usually null for our pulls. |
-| `geo_altitude_m` | DOUBLE | `geo_altitude` | yes | Geometric altitude (meters). |
-| `squawk` | STRING | `squawk` | yes | Squawk code. |
-| `spi` | BOOLEAN | `spi` | yes | Special Purpose Indicator. |
-| `position_source` | INT | `position_source` | yes | 0=ADS-B, 1=ASTERIX, 2=MLAT, 3=FLARM. |
-| `category` | INT | `category` | yes | Aircraft category code (0–20). |
-| `year` | INT | partition / `load_datetime_utc` | no | Partition helper from load date. |
-| `month` | INT | partition / `load_datetime_utc` | no | Partition helper from load date. |
-| `day` | INT | partition / `load_datetime_utc` | no | Partition helper from load date. |
+Script: `sql/silver/create_opensky_states.sql`  
+Validation: `sql/silver/validate_opensky_states.sql`
 
-### Keys / uniqueness
+#### Columns in MVP table
 
-- Business key: `(snapshot_time_unix, icao24)` or `(run_id, icao24)`
-- Expected: one row per aircraft per successful daily run (same snapshot)
+| Column | Type (SQL) | Source | Description |
+|--------|------------|--------|-------------|
+| `snapshot_time_utc` | TIMESTAMP | root.`time` | API snapshot time (Unix → timestamp). |
+| `snapshot_time_unix` | BIGINT | root.`time` | Raw Unix `time`. |
+| `icao24` | STRING | `icao24` | ICAO 24-bit address. |
+| `callsign` | STRING | `callsign` | Trimmed; blank → null. |
+| `origin_country` | STRING | `origin_country` | Country from ICAO address. |
+| `time_position_utc` | TIMESTAMP | `time_position` | Last position update. |
+| `last_contact_utc` | TIMESTAMP | `last_contact` | Last contact. |
+| `longitude` | DOUBLE | `longitude` | WGS-84 longitude. |
+| `latitude` | DOUBLE | `latitude` | WGS-84 latitude. |
+| `baro_altitude_m` | DOUBLE | `baro_altitude` | Barometric altitude (m). |
+| `on_ground` | BOOLEAN | `on_ground` | On-ground flag. |
+| `velocity_ms` | DOUBLE | `velocity` | Ground speed (m/s). |
+| `true_track_deg` | DOUBLE | `true_track` | Track from north (degrees). |
+| `vertical_rate_ms` | DOUBLE | `vertical_rate` | Climb/descent (m/s). |
+| `geo_altitude_m` | DOUBLE | `geo_altitude` | Geometric altitude (m). |
+| `squawk` | STRING | `squawk` | Squawk code. |
+| `spi` | BOOLEAN | `spi` | Special Purpose Indicator. |
+| `position_source` | INT | `position_source` | 0=ADS-B, 1=ASTERIX, 2=MLAT, 3=FLARM. |
+| `category` | INT | `category` | Aircraft category 0–20. |
+
+#### Planned (not in MVP CREATE yet)
+
+| Column | Notes |
+|--------|--------|
+| `run_id` | Join from ADLS `metadata` pipeline_runs |
+| `load_datetime_utc` | From metadata |
+| `sensors` | Usually null for our pulls |
+| `year` / `month` / `day` | Optional partition helpers |
 
 ### Silver cleaning rules (MVP)
 
 - Drop rows with null `icao24`
 - `TRIM` callsign; blank → null
-- Keep API nulls for optional numeric fields
-- Do not invent values for missing altitude / position
+- Cast numerics to DOUBLE / INT
+- Keep API nulls for optional fields (no invented values)
+- Read bronze with `multiLine => true` and `recursiveFileLookup => true`
+
+### How to refresh silver
+
+1. Start Databricks SQL Warehouse.
+2. Run `sql/silver/create_opensky_states.sql` (`CREATE OR REPLACE` rebuilds the table from all bronze files under the path).
+3. Run validation queries in `sql/silver/validate_opensky_states.sql`.
+4. Stop the warehouse.
 
 ### Not in scope yet
 
-- Staging as a separate table (optional later)
+- Separate staging schema
+- Gold marts / Power BI
 - Open-Meteo / other APIs
-- Gold marts / Power BI models
 
-## Example (bronze → conceptual silver row)
+## Example (bronze → silver row)
 
-From bronze state:
+Bronze state:
 
 ```json
 {
@@ -125,7 +148,7 @@ From bronze state:
 }
 ```
 
-Silver intent:
+Silver row (conceptually):
 
 | icao24 | callsign | origin_country | latitude | longitude | baro_altitude_m | velocity_ms | on_ground |
 |--------|----------|----------------|----------|-----------|-----------------|-------------|-----------|

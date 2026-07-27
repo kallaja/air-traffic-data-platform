@@ -1,7 +1,7 @@
 # Air Traffic Data Platform
 
 Cloud-native data platform for collecting and analyzing European air traffic data.  
-Personal project demonstrating batch ingestion, Azure Data Lake Storage Gen2, and a Bronze / Silver / Gold architecture.
+Personal project demonstrating batch ingestion, Azure Data Lake Storage Gen2, Databricks SQL, and a Bronze / Silver / Gold architecture.
 
 ## Problem Statement
 
@@ -10,7 +10,11 @@ Aviation data is spread across multiple APIs and formats. This platform collects
 ## Architecture (MVP)
 
 ```
-OpenSky API  →  Python ingestion  →  ADLS Gen2 (bronze)  →  Databricks (silver/gold)  →  Power BI
+OpenSky API
+    → Python ingestion (+ Azure Functions timer)
+    → ADLS Gen2 (bronze + metadata)
+    → Databricks SQL (silver)
+    → Gold / Power BI (planned)
 ```
 
 ## Technology Stack
@@ -18,89 +22,97 @@ OpenSky API  →  Python ingestion  →  ADLS Gen2 (bronze)  →  Databricks (si
 - **Python** — ingestion scripts
 - **OpenSky Network API** — aircraft state vectors
 - **Azure Data Lake Storage Gen2** — bronze + metadata containers
-- **Azure Identity** — authentication
+- **Azure Functions** — scheduled daily ingestion (Flex Consumption)
+- **Azure Databricks SQL** — bronze → silver transforms
+- **Azure Identity / Access Connector** — secure ADLS access from Databricks
 
 ## Project Structure
 
 ```
 src/
   ingestion/
-    ingest_opensky_states.py   # daily OpenSky states → bronze
+    ingest_opensky_states.py   # OpenSky states → ADLS bronze
+  validation/
+    validate_last_run.py       # check latest metadata run
   utils/
-    storage.py                 # ADLS upload helpers
+    storage.py                 # ADLS helpers
+sql/
+  silver/
+    create_opensky_states.sql  # Databricks SQL: flatten bronze → silver
+    validate_opensky_states.sql
+function_app.py                # timer trigger (daily 10:00 UTC)
 config/
-  sources.yml                  # source config (bbox, schedule)
-docs/                          # architecture, ADRs
+  sources.yml
+docs/
+  data_model.md
+  metadata_schema.md
 ```
 
-## Data Lake Layout
+## Data Layout
 
-**Container `bronze`** — raw data:
+**ADLS `bronze`** — raw JSON:
 
-```
-source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_YYYYMMDDTHHMMSSZ.json
+```text
+source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_….json
 ```
 
-**Container `metadata`** — pipeline run logs:
+**ADLS `metadata`** — pipeline run logs:
 
+```text
+pipeline_runs/source=opensky/entity=states/year=YYYY/month=MM/day=DD/…_metadata.json
 ```
-pipeline_runs/source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_YYYYMMDDTHHMMSSZ_metadata.json
+
+**Databricks** — cleaned table:
+
+```text
+silver.opensky_states
 ```
+
+Grain: one row = one aircraft (`icao24`) in one API snapshot. See `docs/data_model.md`.
 
 ## Getting Started
 
-### 1. Clone and set up environment
+### 1. Local environment
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate   # Windows Git Bash
 pip install -r requirements.txt
-```
-
-### 2. Configure environment variables
-
-Copy the template and fill in your values:
-
-```bash
 cp .env.example .env
 ```
 
-Required variables:
-
-- `OPEN_SKY_CLIENT_ID`, `OPEN_SKY_CLIENT_SECRET`
-- `AZURE_STORAGE_CONNECTION_STRING` (local dev) **or** `AZURE_STORAGE_ACCOUNT_NAME` (Azure Identity)
-- `AZURE_CONTAINER_NAME=bronze`
-- `AZURE_METADATA_CONTAINER_NAME=metadata`
-
-### 3. Create ADLS containers
-
-In Azure Portal → Storage Account → Containers, create:
-
-- `bronze`
-- `metadata`
-
-### 4. Run ingestion
+### 2. Run ingestion (manual)
 
 ```bash
 python src/ingestion/ingest_opensky_states.py
+python src/validation/validate_last_run.py
 ```
 
-Run once per day. Each execution creates a timestamped file in bronze and a matching metadata record.
+Scheduled runs: Azure Function timer (`function_app.py`) at **10:00 UTC**.
+
+### 3. Refresh silver (Databricks SQL)
+
+1. Start SQL Warehouse (e.g. `DWH_aircraft`, 2X-Small, auto-stop on).
+2. Run `sql/silver/create_opensky_states.sql`.
+3. Optionally run `sql/silver/validate_opensky_states.sql`.
+4. **Stop** the SQL Warehouse when finished (billing is for running time).
 
 ## Data Coverage
 
-Current MVP ingests aircraft states for **continental Europe**:
+Continental Europe bbox:
 
-```
-bbox: (35.0, 72.0, -12.0, 42.0)  # min_lat, max_lat, min_lon, max_lon
+```text
+(35.0, 72.0, -12.0, 42.0)  # min_lat, max_lat, min_lon, max_lon
 ```
 
 ## Roadmap
 
-- [ ] Silver layer transforms (Databricks)
+- [x] Bronze ingestion to ADLS
+- [x] Metadata + last-run validation
+- [x] Scheduled ingestion (Azure Functions)
+- [x] Silver layer (Databricks SQL)
 - [ ] Gold layer aggregations
 - [ ] Power BI dashboards
-- [ ] Scheduled daily runs (Azure Functions / ADF)
 - [ ] Additional sources (weather, airport metadata)
 
 ## License
