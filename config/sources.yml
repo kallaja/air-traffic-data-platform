@@ -6,4 +6,58 @@ opensky:
     max_lat: 72.0
     min_lon: -12.0
     max_lon: 42.0
-  schedule: "0 8 * * *"  # daily at 08:00, manual run for now
+  schedule: "0 0 10 * * *"  # Azure Functions: daily 10:00 UTC
+
+restcountries:
+  entity: countries
+  api_version: v5
+  # Requires REST_COUNTRIES_API_KEY (.env). Legacy /v3.1 deprecated.
+  # Reference / dimension data — refresh weekly or on demand
+  schedule: "0 30 10 * * 1"  # Azure Functions: Mondays 10:30 UTC
+
+openmeteo:
+  entity: forecast
+  forecast_days: 7
+  schedule: "0 15 10 * * *"  # Azure Functions: daily 10:15 UTC
+  # Capitals used for MVP weather enrichment (join later via country_cca2)
+  locations:
+    - id: berlin
+      name: Berlin
+      country_cca2: DE
+      latitude: 52.52
+      longitude: 13.41
+    - id: paris
+      name: Paris
+      country_cca2: FR
+      latitude: 48.85
+      longitude: 2.35
+    - id: warsaw
+      name: Warsaw
+      country_cca2: PL
+      latitude: 52.23
+      longitude: 21.01
+    - id: amsterdam
+      name: Amsterdam
+      country_cca2: NL
+      latitude: 52.37
+      longitude: 4.89
+    - id: madrid
+      name: Madrid
+      country_cca2: ES
+      latitude: 40.42
+      longitude: -3.70
+    - id: rome
+      name: Rome
+      country_cca2: IT
+      latitude: 41.90
+      longitude: 12.50
+    - id: london
+      name: London
+      country_cca2: GB
+      latitude: 51.51
+      longitude: -0.13
+    - id: vienna
+      name: Vienna
+      country_cca2: AT
+      latitude: 48.21
+      longitude: 16.37
