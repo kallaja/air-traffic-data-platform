@@ -1,51 +1,86 @@
 # Air Traffic Data Platform
 
-Cloud-native data platform for collecting and analyzing European air traffic data.  
-Personal project demonstrating batch ingestion, Azure Data Lake Storage Gen2, Databricks SQL, and a Bronze / Silver / Gold architecture.
+Cloud-native data engineering platform for collecting, processing, and analyzing European air traffic data.  
+The platform combines aircraft state data with country reference data and weather forecasts, and processes them through a Bronze / Silver / Gold architecture using Azure Data Lake Storage Gen2 and Azure Databricks.
 
 ## Problem Statement
 
-Aviation data is spread across multiple APIs and formats. This platform collects raw aircraft state snapshots, stores them in a scalable data lake, and prepares them for downstream analytics and reporting.
+Air traffic data is distributed across multiple APIs and has different structures, update frequencies, and levels of granularity.
+
+This project builds an end-to-end data platform that:
+- ingests aircraft state snapshots from OpenSky,
+- ingests country reference data and weather forecasts from additional sources,
+- stores immutable raw API responses in a data lake,
+- transforms raw data into curated analytical tables,
+- preserves historical changes in reference data,
+- and prepares curated datasets for downstream analytics in Power BI.
 
 ## Architecture (MVP)
 
 ```
-OpenSky API
-    → Python ingestion (+ Azure Functions timer)
-    → ADLS Gen2 (bronze + metadata)
-    → Databricks SQL (silver)
-    → Gold / Power BI (planned)
+OpenSky API ──────────┐
+REST Countries API ───┼──→ Python ingestion
+Open-Meteo API ───────┘          │
+                                 ↓
+                         Azure Functions
+                         Timer Triggers
+                                 │
+                                 ↓
+                            ADLS Gen2
+                       Bronze + Metadata
+                                 │
+                                 ↓
+                        Databricks SQL
+                         Silver + Gold
+                                 │
+                                 ↓
+                         Power BI (in progress)
 ```
 
 ## Technology Stack
 
 - **Python** — ingestion scripts
 - **OpenSky Network API** — aircraft state vectors
+- **REST Countries API v5** — country dimension (SCD Type 2)
+- **Open-Meteo API** — daily forecast for selected European capitals
 - **Azure Data Lake Storage Gen2** — bronze + metadata containers
-- **Azure Functions** — scheduled daily ingestion (Flex Consumption)
-- **Azure Databricks SQL** — bronze → silver transforms
-- **Azure Identity / Access Connector** — secure ADLS access from Databricks
+- **Azure Functions** — scheduled ingestion (Flex Consumption)
+- **Azure Databricks / Databricks SQL** — Silver and Gold transformations
+- **Delta Lake** — incremental tables and SCD Type 2 history
+- **Unity Catalog** — organization of Silver and Gold data assets
+- **Power BI** — analytical reporting *(in progress)*
 
 ## Project Structure
 
 ```
 src/
   ingestion/
-    ingest_opensky_states.py   # OpenSky states → ADLS bronze
+    ingest_opensky_states.py
+    ingest_restcountries_countries.py
+    ingest_openmeteo_forecast.py
   validation/
-    validate_last_run.py       # check latest metadata run
+    validate_last_run.py
   utils/
-    storage.py                 # ADLS helpers
+    storage.py
+
 sql/
   silver/
-    create_opensky_states.sql  # Databricks SQL: flatten bronze → silver
+    create_opensky_states.sql
     validate_opensky_states.sql
-function_app.py                # timer trigger (daily 10:00 UTC)
+    create_dim_country.sql
+    validate_dim_country.sql
+  gold/
+    create_opensky_activity_by_country_day.sql
+    validate_opensky_activity_by_country_day.sql
+
 config/
   sources.yml
+
 docs/
   data_model.md
   metadata_schema.md
+
+function_app.py
 ```
 
 ## Data Layout
@@ -54,21 +89,29 @@ docs/
 
 ```text
 source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_….json
+source=restcountries/entity=countries/year=YYYY/month=MM/day=DD/restcountries_countries_….json
+source=openmeteo/entity=forecast/year=YYYY/month=MM/day=DD/openmeteo_forecast_….json
 ```
 
-**ADLS `metadata`** — pipeline run logs:
+**ADLS `metadata`** — structured ingestion run metadata:
 
 ```text
 pipeline_runs/source=opensky/entity=states/year=YYYY/month=MM/day=DD/…_metadata.json
+pipeline_runs/source=restcountries/entity=countries/…
+pipeline_runs/source=openmeteo/entity=forecast/…
 ```
 
-**Databricks** — cleaned table:
+**Databricks / Unity Catalog** — cleaned / mart tables:
 
 ```text
-silver.opensky_states
+databricks_aircraft.silver.opensky_states
+databricks_aircraft.silver.dim_country
+databricks_aircraft.gold.opensky_activity_by_country_day
 ```
 
-Grain: one row = one aircraft (`icao24`) in one API snapshot. See `docs/data_model.md`.
+OpenSky grain: one row = one aircraft (`icao24`) in one API snapshot.  
+`dim_country` natural key: `country_cca2` with SCD2 history (`valid_from` / `valid_to` / `is_current`).  
+See `docs/data_model.md`.
 
 ## Getting Started
 
@@ -81,40 +124,82 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Required secrets in `.env` (see `.env.example`): OpenSky OAuth, Azure Storage, `REST_COUNTRIES_API_KEY`.
+
 ### 2. Run ingestion (manual)
 
 ```bash
 python src/ingestion/ingest_opensky_states.py
+python src/ingestion/ingest_restcountries_countries.py
+python src/ingestion/ingest_openmeteo_forecast.py
 python src/validation/validate_last_run.py
 ```
 
-Scheduled runs: Azure Function timer (`function_app.py`) at **10:00 UTC**.
+Scheduled ingestion is configured in `function_app.py` using Azure Functions Timer Triggers:
 
-### 3. Refresh silver (Databricks SQL)
+| Source | Schedule |
+|--------|----------|
+| OpenSky | daily **10:00 UTC** |
+| Open-Meteo | daily **10:15 UTC** |
+| REST Countries | Mondays **10:30 UTC** |
 
-1. Start SQL Warehouse (e.g. `DWH_aircraft`, 2X-Small, auto-stop on).
-2. Run `sql/silver/create_opensky_states.sql`.
-3. Optionally run `sql/silver/validate_opensky_states.sql`.
-4. **Stop** the SQL Warehouse when finished (billing is for running time).
+After deploy, set the same secrets in Function App settings (including `REST_COUNTRIES_API_KEY`).
+
+### 3. Refresh silver / gold (Databricks SQL)
+
+1. Start SQL Warehouse (e.g. `DWH_aircraft`).
+2. Run `sql/silver/create_opensky_states.sql` (incremental `MERGE`).
+3. Run `sql/silver/create_dim_country.sql` (SCD2; typically weekly after REST Countries ingest).
+4. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
+5. Optionally run matching `validate_*.sql` scripts.
+
+`dim_country` requires at least one successful `ingest_restcountries_countries.py` run first.
 
 ## Data Coverage
 
-Continental Europe bbox:
+Continental Europe bbox (OpenSky):
 
 ```text
 (35.0, 72.0, -12.0, 42.0)  # min_lat, max_lat, min_lon, max_lon
 ```
 
-## Roadmap
+Open-Meteo MVP locations: selected European capitals listed in `config/sources.yml`.
 
-- [x] Bronze ingestion to ADLS
-- [x] Metadata + last-run validation
-- [x] Scheduled ingestion (Azure Functions)
-- [x] Silver layer (Databricks SQL)
-- [ ] Gold layer aggregations
-- [ ] Power BI dashboards
-- [ ] Additional sources (weather, airport metadata)
+## Current Project Status
+
+### Implemented
+
+- [x] Multi-source REST API ingestion (OpenSky, REST Countries, Open-Meteo)
+- [x] ADLS Gen2 Bronze storage
+- [x] Date-partitioned Bronze layout
+- [x] Structured ingestion run metadata
+- [x] Scheduled ingestion with Azure Functions
+- [x] Silver OpenSky transformation
+- [x] Incremental/idempotent Silver `MERGE`
+- [x] Country dimension with SCD Type 2 history
+- [x] Silver validation queries
+- [x] Initial Gold mart — aircraft activity by country/day
+- [x] Unity Catalog structure for Silver and Gold
+- [x] Power BI connectivity
+
+### Planned
+
+- [ ] OpenSky `origin_country` → ISO `country_cca2` mapping
+- [ ] Silver weather transformation
+- [ ] Define weather-to-air-traffic mapping strategy
+- [ ] Integrate weather data into Gold analytics
+- [ ] Extended Gold analytical model
+- [ ] Production-quality Power BI dashboard
+- [ ] PySpark transformations
+- [ ] Databricks Jobs orchestration
+- [ ] File-level incremental processing / watermarking
+- [ ] Automated data quality checks
+- [ ] Aircraft reference data enrichment
+- [ ] Unity Catalog access-control examples
+
+> **Incremental processing:** Silver currently uses an idempotent `MERGE`, while Bronze files are still scanned recursively. File-level watermarking is planned to process only newly ingested Bronze files.
 
 ## License
 
-Personal project — not for commercial use of third-party API data without checking respective terms.
+Personal educational project.
+Third-party datasets and APIs remain subject to their respective licenses and terms of use.
