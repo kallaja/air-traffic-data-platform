@@ -36,7 +36,7 @@ CREATE OR REPLACE TEMP VIEW stg_dim_country AS
 WITH bronze_countries AS (
   SELECT
     to_timestamp(bronze.fetched_at_utc) AS source_fetched_at_utc,
-    UPPER(TRIM(c.codes.alpha_2)) AS country_cca2,
+    NULLIF(UPPER(TRIM(c.codes.alpha_2)), '') AS country_cca2,
     UPPER(TRIM(c.codes.alpha_3)) AS country_cca3,
     NULLIF(TRIM(c.names.common), '') AS name_common,
     NULLIF(TRIM(c.names.official), '') AS name_official,
@@ -76,7 +76,8 @@ WITH bronze_countries AS (
   ) AS bronze
   LATERAL VIEW explode(bronze.countries) e AS c
   WHERE c.codes.alpha_2 IS NOT NULL
-    AND bronze.api_version = 'v5'
+  AND TRIM(c.codes.alpha_2) <> ''
+  AND bronze.api_version = 'v5'
 ),
 ranked AS (
   SELECT
