@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
@@ -35,6 +36,44 @@ def upload_json_to_container(
 
     payload = json.dumps(data, indent=2, ensure_ascii=False)
     blob_client.upload_blob(payload, overwrite=True)
+
+
+def upload_json_to_container(
+    container_name: str,
+    blob_path: str,
+    data: dict | list,
+) -> None:
+    storage_backend = os.getenv("STORAGE_BACKEND", "azure")
+
+    payload = json.dumps(data, indent=2, ensure_ascii=False)
+
+    if storage_backend == "local":
+        local_root = Path(
+            os.getenv("LOCAL_STORAGE_ROOT", "data")
+        )
+
+        file_path = local_root / container_name / blob_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file_path.write_text(
+            payload,
+            encoding="utf-8",
+        )
+        return
+
+    if storage_backend == "azure":
+        blob_service_client = get_blob_service_client()
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name,
+            blob=blob_path,
+        )
+
+        blob_client.upload_blob(payload, overwrite=True)
+        return
+
+    raise ValueError(
+        f"Unsupported STORAGE_BACKEND: {storage_backend}"
+    )
 
 
 def download_json_from_container(container_name: str, blob_path: str) -> dict | list:
