@@ -198,6 +198,9 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] Initial Gold mart — aircraft activity by country/day
 - [x] Unity Catalog structure for Silver and Gold
 - [x] Power BI connectivity
+- [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
+- [x] File-level incremental processing (Auto Loader checkpoint)
+- [x] Silver staging data quality checks (OpenSky)
 
 ### Planned
 
@@ -207,9 +210,6 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Integrate weather data into Gold analytics
 - [ ] Extended Gold analytical model
 - [ ] Production-quality Power BI dashboard
-- [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
-- [x] File-level incremental processing (Auto Loader checkpoint)
-- [x] Silver staging data quality checks (OpenSky)
 - [ ] Databricks Jobs orchestration
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
