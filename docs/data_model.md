@@ -5,9 +5,9 @@
 Air traffic platform:
 
 ```text
-bronze (ADLS JSON)
-  → silver (Databricks SQL table: silver.opensky_states)
-  → gold (planned)
+bronze (ADLS JSON, hive-style folders)
+  → silver (Delta table via PySpark Auto Loader + MERGE)
+    → gold (Databricks SQL marts)
 ```
 
 Classic DWH analogy: ADLS bronze ≈ landing; `silver.opensky_states` ≈ cleaned core table; gold ≈ marts for Power BI.
@@ -19,7 +19,7 @@ Classic DWH analogy: ADLS bronze ≈ landing; `silver.opensky_states` ≈ cleane
 
 ## Grain (OpenSky silver)
 
-**1 row = one aircraft (`icao24`) in one API snapshot** (`time` from the bronze file / one ingestion run).
+1 row = one aircraft (`icao24`) in one API snapshot (`time` from the bronze file / one ingestion run).
 
 Business key (MVP): `(snapshot_time_unix, icao24)`.
 
@@ -34,7 +34,7 @@ Business key (MVP): `(snapshot_time_unix, icao24)`.
 bronze/source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_YYYYMMDDTHHMMSSZ.json
 ```
 
-Silver does **not** write back to ADLS in this MVP. Cleaned data lives as a **Databricks table**.
+Silver does not write cleaned rows back into the bronze container. The Delta table can live as a Unity Catalog managed table (workspace) or later as an external table on ADLS. Auto Loader checkpoints go to a separate folder, outside bronze.
 
 #### Response-level fields (file root)
 
@@ -56,13 +56,13 @@ Source: OpenSky REST API — All State Vectors response.
 | 4 | `last_contact` | int | no* | Unix timestamp (seconds) of last update in general (any valid transponder message). |
 | 5 | `longitude` | float | yes | WGS-84 longitude in decimal degrees. |
 | 6 | `latitude` | float | yes | WGS-84 latitude in decimal degrees. |
-| 7 | `baro_altitude` | float | yes | Barometric altitude in **meters**. |
+| 7 | `baro_altitude` | float | yes | Barometric altitude in meters. |
 | 8 | `on_ground` | boolean | no* | `true` if position came from a surface position report. |
-| 9 | `velocity` | float | yes | Velocity over ground in **m/s**. |
+| 9 | `velocity` | float | yes | Velocity over ground in m/s. |
 | 10 | `true_track` | float | yes | True track in decimal degrees clockwise from north (north = 0°). |
-| 11 | `vertical_rate` | float | yes | Vertical rate in **m/s**. Positive = climbing, negative = descending. |
+| 11 | `vertical_rate` | float | yes | Vertical rate in m/s. Positive = climbing, negative = descending. |
 | 12 | `sensors` | int[] / null | yes | IDs of receivers that contributed to this vector. Null if no sensor filter was used (typical for our requests). |
-| 13 | `geo_altitude` | float | yes | Geometric altitude in **meters**. |
+| 13 | `geo_altitude` | float | yes | Geometric altitude in meters. |
 | 14 | `squawk` | string | yes | Transponder code (squawk). |
 | 15 | `spi` | boolean | no* | Whether flight status indicates Special Purpose Indicator. |
 | 16 | `position_source` | int | no* | Origin of position: `0` = ADS-B, `1` = ASTERIX, `2` = MLAT, `3` = FLARM. |
@@ -72,10 +72,11 @@ Source: OpenSky REST API — All State Vectors response.
 
 ### Silver: `silver.opensky_states` (implemented)
 
-Built in Databricks SQL from bronze via `read_files` + `LATERAL VIEW explode(states)`.
+Built in PySpark: Auto Loader reads new bronze JSON files, `explode(states)`, join ingestion metadata, insert-only Delta `MERGE`.
 
-Script: `sql/silver/create_opensky_states.sql`  
-Validation: `sql/silver/validate_opensky_states.sql`
+Script: `src/transformation/transform_opensky_states.py`  
+Validation: `sql/silver/validate_opensky_states.sql`  
+Older SQL version kept for reference: `sql/silver/create_opensky_states.sql`
 
 #### Columns in MVP table
 
@@ -94,21 +95,25 @@ Validation: `sql/silver/validate_opensky_states.sql`
 | `on_ground` | BOOLEAN | `on_ground` | On-ground flag. |
 | `velocity_ms` | DOUBLE | `velocity` | Ground speed (m/s). |
 | `true_track_deg` | DOUBLE | `true_track` | Track from north (degrees). |
-| `vertical_rate_ms` | DOUBLE | `vertical_rate` | Climb/descent (m/s). |
 | `geo_altitude_m` | DOUBLE | `geo_altitude` | Geometric altitude (m). |
 | `squawk` | STRING | `squawk` | Squawk code. |
 | `spi` | BOOLEAN | `spi` | Special Purpose Indicator. |
 | `position_source` | INT | `position_source` | 0=ADS-B, 1=ASTERIX, 2=MLAT, 3=FLARM. |
 | `category` | INT | `category` | Aircraft category 0–20. |
+| `transformation_run_id` | STRING | job | UUID of the Silver run. |
+| `source_file_path` | STRING | `_metadata.file_path` | Full URI of the bronze file. |
+| `ingestion_run_id` | STRING | metadata `run_id` | Ingestion run that wrote the bronze file. |
+| `bronze_load_datetime_utc` | TIMESTAMP | metadata | When ingestion started. |
+| `silver_load_datetime_utc` | TIMESTAMP | job | When this Silver run wrote the row. |
 
-#### Planned (not in MVP CREATE yet)
+`vertical_rate` stays in bronze only; it is not in this Silver table yet.
+
+#### Planned
 
 | Column | Notes |
 |--------|--------|
-| `run_id` | Join from ADLS `metadata` pipeline_runs |
-| `load_datetime_utc` | From metadata |
 | `sensors` | Usually null for our pulls |
-| `year` / `month` / `day` | Optional partition helpers |
+| `snapshot_date` | Generated from `snapshot_time_utc` if the Delta table is partitioned later |
 
 ### Silver cleaning rules (MVP)
 
@@ -116,20 +121,23 @@ Validation: `sql/silver/validate_opensky_states.sql`
 - `TRIM` callsign; blank → null
 - Cast numerics to DOUBLE / INT
 - Keep API nulls for optional fields (no invented values)
-- Read bronze with `multiLine => true` and `recursiveFileLookup => true`
+- Auto Loader + `multiLine` JSON; skip already-seen files via checkpoint
+- Insert-only `MERGE` on `(snapshot_time_unix, icao24)`
 
 ### How to refresh silver
 
-1. Start Databricks SQL Warehouse.
-2. Run `sql/silver/create_opensky_states.sql` (`CREATE OR REPLACE` rebuilds the table from all bronze files under the path).
+1. Configure `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH`.
+2. Run `src/transformation/transform_opensky_states.py` on a Databricks cluster.
 3. Run validation queries in `sql/silver/validate_opensky_states.sql`.
-4. Stop the warehouse.
 
-### Not in scope yet
+### Still open
 
-- Separate staging schema
-- Gold marts / Power BI
-- Open-Meteo / other APIs
+- Databricks Jobs
+- Delta partitioning on Silver (`snapshot_date`)
+- Auto Loader file notifications (Event Grid) on ADLS
+- Proper Gold model (current activity table is just a test / connectivity check)
+- Power BI dashboard (connection works; no report yet)
+- Weather Silver from Open-Meteo
 
 ## Example (bronze → silver row)
 

@@ -30,8 +30,9 @@ Open-Meteo API ───────┘          │
                        Bronze + Metadata
                                  │
                                  ↓
-                        Databricks SQL
-                         Silver + Gold
+                    Azure Databricks (PySpark)
+              OpenSky Silver: Auto Loader + MERGE
+                         SQL: other Silver/Gold
                                  │
                                  ↓
                          Power BI (in progress)
@@ -45,7 +46,7 @@ Open-Meteo API ───────┘          │
 - **Open-Meteo API** — daily forecast for selected European capitals
 - **Azure Data Lake Storage Gen2** — bronze + metadata containers
 - **Azure Functions** — scheduled ingestion (Flex Consumption)
-- **Azure Databricks / Databricks SQL** — Silver and Gold transformations
+- **Azure Databricks** — OpenSky Silver in PySpark (Auto Loader + Delta MERGE); other Silver/Gold still in Databricks SQL
 - **Delta Lake** — incremental tables and SCD Type 2 history
 - **Unity Catalog** — organization of Silver and Gold data assets
 - **Power BI** — analytical reporting *(in progress)*
@@ -58,6 +59,8 @@ src/
     ingest_opensky_states.py
     ingest_restcountries_countries.py
     ingest_openmeteo_forecast.py
+  transformation/
+    transform_opensky_states.py
   validation/
     validate_last_run.py
   utils/
@@ -139,19 +142,33 @@ Scheduled ingestion is configured in `function_app.py` using Azure Functions Tim
 
 | Source | Schedule |
 |--------|----------|
-| OpenSky | daily **10:00 UTC** |
-| Open-Meteo | daily **10:15 UTC** |
-| REST Countries | Mondays **10:30 UTC** |
+| OpenSky | daily 10:00 UTC |
+| Open-Meteo | daily 10:15 UTC |
+| REST Countries | Mondays 10:30 UTC |
 
 After deploy, set the same secrets in Function App settings (including `REST_COUNTRIES_API_KEY`).
 
-### 3. Refresh silver / gold (Databricks SQL)
+### 3. Refresh OpenSky silver (Databricks PySpark)
+
+Use `src/transformation/transform_opensky_states.py`.
+
+Set these on the cluster or notebook (Databricks does not load `.env`):
+
+- `BRONZE_BASE_PATH`
+- `METADATA_BASE_PATH`
+- `SILVER_OPENSKY_TABLE` (`catalog.schema.table`)
+- `SILVER_OPENSKY_CHECKPOINT_PATH` — separate folder per pipeline, not under bronze  
+  Example: `/Volumes/workspace/default/air_traffic_data/checkpoints/opensky_states`
+
+The job uses Auto Loader (`availableNow`) for new bronze JSON files, then insert-only Delta `MERGE`.  
+`sql/silver/create_opensky_states.sql` is the older SQL version; leave it as reference and do not run it on the PySpark table.
+
+### 4. Refresh other silver / gold (Databricks SQL)
 
 1. Start SQL Warehouse (e.g. `DWH_aircraft`).
-2. Run `sql/silver/create_opensky_states.sql` (incremental `MERGE`).
-3. Run `sql/silver/create_dim_country.sql` (SCD2; typically weekly after REST Countries ingest).
-4. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
-5. Optionally run matching `validate_*.sql` scripts.
+2. Run `sql/silver/create_dim_country.sql` (SCD2; typically weekly after REST Countries ingest).
+3. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
+4. Optionally run matching `validate_*.sql` scripts.
 
 `dim_country` requires at least one successful `ingest_restcountries_countries.py` run first.
 
@@ -190,14 +207,14 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Integrate weather data into Gold analytics
 - [ ] Extended Gold analytical model
 - [ ] Production-quality Power BI dashboard
-- [ ] PySpark transformations
+- [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
+- [x] File-level incremental processing (Auto Loader checkpoint)
+- [x] Silver staging data quality checks (OpenSky)
 - [ ] Databricks Jobs orchestration
-- [ ] File-level incremental processing / watermarking
-- [ ] Automated data quality checks
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
 
-> **Incremental processing:** Silver currently uses an idempotent `MERGE`, while Bronze files are still scanned recursively. File-level watermarking is planned to process only newly ingested Bronze files.
+> Incremental processing: OpenSky Silver uses Auto Loader to skip already-seen bronze files, and an insert-only Delta `MERGE` on `(snapshot_time_unix, icao24)` so existing rows stay unchanged. Databricks Jobs are next.
 
 ## License
 
