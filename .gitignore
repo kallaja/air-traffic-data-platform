@@ -67,3 +67,5 @@ htmlcov/
 *.key
 credentials.json
 secrets.json
+
+sample_data/
