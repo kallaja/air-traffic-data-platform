@@ -1,4 +1,6 @@
--- Load silver.opensky_states incrementally (append-only fact).
+-- Older SQL version of silver.opensky_states (append-only MERGE).
+-- Current path: src/transformation/transform_opensky_states.py (Auto Loader + PySpark MERGE).
+-- Do not run this script against the PySpark Silver table.
 -- Pattern (classic DWH):
 -- 1) CREATE TABLE IF NOT EXISTS (keep history)
 -- 2) Stage all bronze state vectors
