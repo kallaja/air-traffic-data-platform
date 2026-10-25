@@ -1,4 +1,6 @@
 -- Validate silver.dim_country (SCD Type 2)
+-- Run after src/transformation/transform_dim_country.py
+-- (or the older sql/silver/create_dim_country.sql prototype).
 
 -- 1) Current row count (≈ number of countries in source, ~250)
 SELECT COUNT(*) AS current_row_count

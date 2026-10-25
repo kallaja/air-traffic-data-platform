@@ -31,8 +31,8 @@ Open-Meteo API ───────┘          │
                                  │
                                  ↓
                     Azure Databricks (PySpark)
-              OpenSky Silver: Auto Loader + MERGE
-                         SQL: other Silver/Gold
+         OpenSky Silver (Auto Loader) + dim_country (SCD2)
+                         SQL: Gold marts
                                  │
                                  ↓
                          Power BI (in progress)
@@ -46,7 +46,7 @@ Open-Meteo API ───────┘          │
 - **Open-Meteo API** — daily forecast for selected European capitals
 - **Azure Data Lake Storage Gen2** — bronze + metadata containers
 - **Azure Functions** — scheduled ingestion (Flex Consumption)
-- **Azure Databricks** — OpenSky Silver in PySpark (Auto Loader + Delta MERGE); other Silver/Gold still in Databricks SQL
+- **Azure Databricks** — OpenSky Silver (Auto Loader + MERGE) and dim_country (SCD2) in PySpark; Gold still in Databricks SQL
 - **Delta Lake** — incremental tables and SCD Type 2 history
 - **Unity Catalog** — organization of Silver and Gold data assets
 - **Power BI** — analytical reporting *(in progress)*
@@ -61,6 +61,7 @@ src/
     ingest_openmeteo_forecast.py
   transformation/
     transform_opensky_states.py
+    transform_dim_country.py
   validation/
     validate_last_run.py
   utils/
@@ -163,14 +164,24 @@ Set these on the cluster or notebook (Databricks does not load `.env`):
 The job uses Auto Loader (`availableNow`) for new bronze JSON files, then insert-only Delta `MERGE`.  
 `sql/silver/create_opensky_states.sql` is the older SQL version; leave it as reference and do not run it on the PySpark table.
 
-### 4. Refresh other silver / gold (Databricks SQL)
+### 4. Refresh dim_country (Databricks PySpark, SCD2)
+
+Use `src/transformation/transform_dim_country.py` after a successful REST Countries bronze load.
+
+Set on the cluster or notebook:
+
+- `BRONZE_BASE_PATH` (same root as OpenSky)
+- `SILVER_DIM_COUNTRY_TABLE` (`catalog.schema.table`)
+
+Batch read of bronze snapshots, latest row per `country_cca2`, then SCD2 close + insert.  
+`sql/silver/create_dim_country.sql` is the older SQL version; leave it as reference.  
+Validate with `sql/silver/validate_dim_country.sql`.
+
+### 5. Refresh gold (Databricks SQL)
 
 1. Start SQL Warehouse (e.g. `DWH_aircraft`).
-2. Run `sql/silver/create_dim_country.sql` (SCD2; typically weekly after REST Countries ingest).
-3. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
-4. Optionally run matching `validate_*.sql` scripts.
-
-`dim_country` requires at least one successful `ingest_restcountries_countries.py` run first.
+2. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
+3. Optionally run matching `validate_*.sql` scripts.
 
 ## Data Coverage
 
@@ -194,6 +205,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] Silver OpenSky transformation
 - [x] Incremental/idempotent Silver `MERGE`
 - [x] Country dimension with SCD Type 2 history
+- [x] PySpark dim_country (SCD2 close + insert)
 - [x] Silver validation queries
 - [x] Initial Gold mart — aircraft activity by country/day
 - [x] Unity Catalog structure for Silver and Gold
@@ -214,7 +226,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
 
-> Incremental processing: OpenSky Silver uses Auto Loader to skip already-seen bronze files, and an insert-only Delta `MERGE` on `(snapshot_time_unix, icao24)` so existing rows stay unchanged. Databricks Jobs are next.
+> Incremental processing: OpenSky Silver uses Auto Loader plus insert-only MERGE on `(snapshot_time_unix, icao24)`. dim_country uses batch bronze read and SCD2 (close changed current rows, insert new versions). Databricks Jobs are next.
 
 ## License
 

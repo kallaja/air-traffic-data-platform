@@ -5,17 +5,20 @@
 Air traffic platform:
 
 ```text
-bronze (ADLS JSON, hive-style folders)
-  → silver (Delta table via PySpark Auto Loader + MERGE)
+bronze (ADLS / Volume JSON, hive-style folders)
+  → silver.opensky_states (PySpark Auto Loader + insert-only MERGE)
+  → silver.dim_country (PySpark batch + SCD Type 2)
     → gold (Databricks SQL marts)
 ```
 
-Classic DWH analogy: ADLS bronze ≈ landing; `silver.opensky_states` ≈ cleaned core table; gold ≈ marts for Power BI.
+Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ marts for Power BI.
 
 ## Current sources
 
 - OpenSky `/states/all` — daily snapshot for Europe bbox  
   Docs: https://openskynetwork.github.io/opensky-api/rest.html
+- REST Countries API v5 — country reference (names, codes, capitals, geo, population)  
+  Docs: https://restcountries.com/
 
 ## Grain (OpenSky silver)
 
@@ -23,18 +26,25 @@ Classic DWH analogy: ADLS bronze ≈ landing; `silver.opensky_states` ≈ cleane
 
 Business key (MVP): `(snapshot_time_unix, icao24)`.
 
+## Grain (dim_country)
+
+Natural key: `country_cca2` (ISO 3166-1 alpha-2).
+
+SCD Type 2: many rows per country over time; at most one row with `is_current = true`.  
+As-of use: `activity_date >= valid_from AND activity_date < valid_to`.
+
 ## Layers
 
-### Bronze (ADLS)
+### Bronze (ADLS or UC Volume)
 
-- Raw JSON from OpenSky (as written by `ingest_opensky_states.py`).
-- Path:
+Raw JSON from ingestion scripts. Paths:
 
 ```text
-bronze/source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_YYYYMMDDTHHMMSSZ.json
+bronze/source=opensky/entity=states/year=YYYY/month=MM/day=DD/opensky_states_….json
+bronze/source=restcountries/entity=countries/year=YYYY/month=MM/day=DD/restcountries_countries_….json
 ```
 
-Silver does not write cleaned rows back into the bronze container. The Delta table can live as a Unity Catalog managed table (workspace) or later as an external table on ADLS. Auto Loader checkpoints go to a separate folder, outside bronze.
+Silver does not write cleaned rows back into bronze. Delta tables can be Unity Catalog managed (workspace) or later external on ADLS. OpenSky Auto Loader checkpoints live outside bronze.
 
 #### Response-level fields (file root)
 
@@ -124,11 +134,57 @@ Older SQL version kept for reference: `sql/silver/create_opensky_states.sql`
 - Auto Loader + `multiLine` JSON; skip already-seen files via checkpoint
 - Insert-only `MERGE` on `(snapshot_time_unix, icao24)`
 
-### How to refresh silver
+### How to refresh OpenSky silver
 
 1. Configure `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH`.
 2. Run `src/transformation/transform_opensky_states.py` on a Databricks cluster.
 3. Run validation queries in `sql/silver/validate_opensky_states.sql`.
+
+### Silver: `silver.dim_country` (implemented)
+
+Country dimension from REST Countries bronze. SCD Type 2: close current row when attributes change (`row_hash`), then insert a new current version.
+
+Script: `src/transformation/transform_dim_country.py`  
+Validation: `sql/silver/validate_dim_country.sql`  
+Older SQL version kept for reference: `sql/silver/create_dim_country.sql`
+
+Flow:
+
+1. Batch-read bronze under `source=restcountries/entity=countries/` (`api_version = v5`).
+2. Explode `countries`, clean codes/names, pick primary capital (else first).
+3. Keep latest snapshot per `country_cca2` (`ROW_NUMBER` by `fetched_at_utc`).
+4. Compute `row_hash` (md5 of business attributes).
+5. MERGE: if current hash differs → set `is_current = false`, `valid_to = load_date`.
+6. INSERT rows that have no current version (new country or new version after close).
+
+#### Columns
+
+| Column | Type (SQL) | Description |
+|--------|------------|-------------|
+| `country_cca2` | STRING | ISO alpha-2 code (natural key). |
+| `country_cca3` | STRING | ISO alpha-3 code. |
+| `name_common` | STRING | Common name. |
+| `name_official` | STRING | Official name. |
+| `region` | STRING | Region. |
+| `subregion` | STRING | Subregion. |
+| `capital` | STRING | Primary capital name (else first). |
+| `capital_latitude` | DOUBLE | Capital latitude. |
+| `capital_longitude` | DOUBLE | Capital longitude. |
+| `country_latitude` | DOUBLE | Country centroid latitude. |
+| `country_longitude` | DOUBLE | Country centroid longitude. |
+| `population` | BIGINT | Population. |
+| `area_km2` | DOUBLE | Area in km². |
+| `row_hash` | STRING | MD5 of attributes (change detection). |
+| `valid_from` | DATE | Start of this version. |
+| `valid_to` | DATE | End of version; `9999-12-31` while current. |
+| `is_current` | BOOLEAN | True for the open version. |
+| `source_fetched_at_utc` | TIMESTAMP | `fetched_at_utc` from bronze. |
+
+#### How to refresh dim_country
+
+1. Configure `BRONZE_BASE_PATH`, `SILVER_DIM_COUNTRY_TABLE`.
+2. Run `src/transformation/transform_dim_country.py` on a Databricks cluster (after REST Countries ingest).
+3. Run `sql/silver/validate_dim_country.sql`.
 
 ### Still open
 
@@ -138,6 +194,7 @@ Older SQL version kept for reference: `sql/silver/create_opensky_states.sql`
 - Proper Gold model (current activity table is just a test / connectivity check)
 - Power BI dashboard (connection works; no report yet)
 - Weather Silver from Open-Meteo
+- OpenSky `origin_country` → `country_cca2` mapping
 
 ## Example (bronze → silver row)
 

@@ -1,4 +1,6 @@
--- Load silver.dim_country with SCD Type 2 (history preserved)
+-- Older SQL version of silver.dim_country (SCD Type 2).
+-- Current path: src/transformation/transform_dim_country.py
+-- Do not run this script against the PySpark dim_country table.
 -- Source: REST Countries API v5
 --   (names.*, codes.*, capitals[], coordinates, population, area)
 --
@@ -45,22 +47,22 @@ WITH bronze_countries AS (
     NULLIF(
       TRIM(
         coalesce(
-          element_at(filter(c.capitals, x -> x.attributes.primary = true), 1).name,
-          element_at(c.capitals, 1).name
+          get(filter(c.capitals, x -> x.attributes.primary = true), 0).name,
+          get(c.capitals, 0).name
         )
       ),
       ''
     ) AS capital,
     CAST(
       coalesce(
-        element_at(filter(c.capitals, x -> x.attributes.primary = true), 1).coordinates.lat,
-        element_at(c.capitals, 1).coordinates.lat
+        get(filter(c.capitals, x -> x.attributes.primary = true), 0).coordinates.lat,
+        get(c.capitals, 0).coordinates.lat
       ) AS DOUBLE
     ) AS capital_latitude,
     CAST(
       coalesce(
-        element_at(filter(c.capitals, x -> x.attributes.primary = true), 1).coordinates.lng,
-        element_at(c.capitals, 1).coordinates.lng
+        get(filter(c.capitals, x -> x.attributes.primary = true), 0).coordinates.lng,
+        get(c.capitals, 0).coordinates.lng
       ) AS DOUBLE
     ) AS capital_longitude,
     CAST(c.coordinates.lat AS DOUBLE) AS country_latitude,
