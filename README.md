@@ -32,7 +32,7 @@ Open-Meteo API ───────┘          │
                                  ↓
                     Azure Databricks (PySpark)
          OpenSky Silver (Auto Loader) + dim_country (SCD2)
-                         SQL: Gold marts
+              Databricks SQL: Gold activity marts (in progress)
                                  │
                                  ↓
                          Power BI (in progress)
@@ -46,7 +46,7 @@ Open-Meteo API ───────┘          │
 - **Open-Meteo API** — daily forecast for selected European capitals
 - **Azure Data Lake Storage Gen2** — bronze + metadata containers
 - **Azure Functions** — scheduled ingestion (Flex Consumption)
-- **Azure Databricks** — OpenSky Silver (Auto Loader + MERGE) and dim_country (SCD2) in PySpark; Gold still in Databricks SQL
+- **Azure Databricks** — OpenSky Silver (Auto Loader + MERGE) and dim_country (SCD2) in PySpark
 - **Delta Lake** — incremental tables and SCD Type 2 history
 - **Unity Catalog** — organization of Silver and Gold data assets
 - **Power BI** — analytical reporting *(in progress)*
@@ -180,12 +180,6 @@ Validate with `sql/silver/validate_dim_country.sql`.
 
 Scheduled Bronze → Silver runs are documented in [`docs/databricks_jobs.md`](docs/databricks_jobs.md) (OpenSky daily, REST Countries weekly).
 
-### 5. Refresh gold (Databricks SQL)
-
-1. Start SQL Warehouse (e.g. `DWH_aircraft`).
-2. Run `sql/gold/create_opensky_activity_by_country_day.sql`.
-3. Optionally run matching `validate_*.sql` scripts.
-
 ## Data Coverage
 
 Continental Europe bbox (OpenSky):
@@ -215,7 +209,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] Power BI connectivity
 - [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
 - [x] File-level incremental processing (Auto Loader checkpoint)
-- [x] Silver staging data quality checks (OpenSky)
+- [x] Silver hard-fail DQ (OpenSky staging; dim_country staging + post-SCD2)
 - [x] Databricks Jobs orchestration (see `docs/databricks_jobs.md`)
 
 ### Planned
@@ -229,7 +223,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
 
-> Incremental processing: OpenSky Silver uses Auto Loader plus insert-only MERGE on `(snapshot_time_unix, icao24)`. dim_country uses batch bronze read and SCD2 (close changed current rows, insert new versions). Databricks Jobs are next.
+> Incremental processing: OpenSky Silver uses Auto Loader plus insert-only MERGE on `(snapshot_time_unix, icao24)`. dim_country uses batch bronze read and SCD2 (close changed current rows, insert new versions). Bronze → Silver is scheduled via Databricks Jobs (see `docs/databricks_jobs.md`).
 
 ## License
 

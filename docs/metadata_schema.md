@@ -1,13 +1,13 @@
 # Metadata Schema — Pipeline Runs
 
-Metadata files are stored in the `metadata` container under:
+Metadata files are stored under the metadata root (ADLS `metadata` container or the matching UC Volume folder) as:
 
 ```
 pipeline_runs/source=opensky/entity=states/year=YYYY/month=MM/day=DD/
   opensky_states_YYYYMMDDTHHMMSSZ_metadata.json
 ```
 
-Each ingestion run produces one metadata file. Bronze data is stored separately in the `bronze` container when the run loads at least one record.
+Each ingestion run produces one metadata file. Bronze data is stored separately under the bronze root when the run loads at least one record.
 
 ## Fields
 
@@ -19,7 +19,7 @@ Each ingestion run produces one metadata file. Bronze data is stored separately 
 | `entity`            | string            | yes      | Dataset within the source. Current value: `states`                                        |
 | `load_datetime_utc` | string (ISO 8601) | yes      | UTC timestamp when ingestion started                                                      |
 | `records_loaded`    | integer           | yes      | Number of aircraft state vectors returned by OpenSky                                      |
-| `destination_path`  | string | null     | yes      | Path to the bronze file in the `bronze` container. `null` when no bronze file was written |
+| `destination_path`  | string | null     | yes      | Relative path to the bronze file under the bronze root. `null` when no bronze file was written |
 | `bbox`              | array[4 float]    | yes      | Geographic bounding box used for the API request: `[min_lat, max_lat, min_lon, max_lon]`  |
 | `api_time_unix`     | integer           | yes      | Unix timestamp returned by OpenSky in the API response                                    |
 | `status`            | string            | yes      | Run outcome. Allowed values: `success`, `warning`, `failed`                               |
@@ -63,6 +63,7 @@ The script `src/validation/validate_last_run.py` checks the latest metadata file
 ## Notes
 
 - `bbox` describes one rectangular region requested from OpenSky, not individual countries
-- `destination_path` is relative to the `bronze` container
+- `destination_path` is relative to the bronze root (ADLS container or Volume)
 - Metadata is always written, even when bronze upload is skipped
+- This document focuses on OpenSky; REST Countries / Open-Meteo use the same `pipeline_runs/source=…/entity=…/` layout with source-specific fields
 

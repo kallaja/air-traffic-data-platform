@@ -8,10 +8,12 @@ Air traffic platform:
 bronze (ADLS / Volume JSON, hive-style folders)
   → silver.opensky_states (PySpark Auto Loader + insert-only MERGE)
   → silver.dim_country (PySpark batch + SCD Type 2)
-    → gold (Databricks SQL marts)
+    → gold.opensky_activity_by_country_day (Databricks SQL, MVP)
 ```
 
-Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ marts for Power BI.
+Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ mart for Power BI (MVP; expand later).
+
+Orchestration: `docs/databricks_jobs.md`.
 
 ## Current sources
 
