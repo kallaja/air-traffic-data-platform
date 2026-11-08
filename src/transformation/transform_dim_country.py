@@ -211,6 +211,53 @@ def validate_staging(df_staging):
     assert_no_rows(duplicate_keys, "Duplicate country_cca2 in staging")
 
 
+def validate_dim_country_table(spark, target_table):
+    """Hard-fail SCD2 checks (same intent as sql/silver/validate_dim_country.sql)."""
+    df = spark.table(target_table)
+    df_current = df.filter(F.col("is_current"))
+
+    if df_current.limit(1).count() == 0:
+        raise ValueError(
+            "Data quality check failed: no current dim_country rows"
+        )
+
+    duplicate_current = (
+        df_current.groupBy("country_cca2")
+        .count()
+        .filter(F.col("count") > 1)
+    )
+    assert_no_rows(
+        duplicate_current,
+        "Multiple current rows for one country_cca2",
+    )
+
+    missing_required = df_current.filter(
+        F.col("country_cca2").isNull()
+        | (F.trim("country_cca2") == "")
+        | F.col("name_common").isNull()
+        | (F.trim("name_common") == "")
+        | F.col("row_hash").isNull()
+        | (F.trim("row_hash") == "")
+    )
+    assert_no_rows(
+        missing_required,
+        "NULL/empty required fields on current dim_country",
+    )
+
+    bad_scd2 = df.filter(
+        (
+            F.col("is_current")
+            & (F.col("valid_to") != F.lit("9999-12-31").cast("date"))
+        )
+        | (
+            (~F.col("is_current"))
+            & (F.col("valid_to") == F.lit("9999-12-31").cast("date"))
+        )
+        | (F.col("valid_from") >= F.col("valid_to"))
+    )
+    assert_no_rows(bad_scd2, "Invalid SCD2 valid_from/valid_to/is_current")
+
+
 def create_dim_country_table(spark, target_table):
     spark.sql(
         f"""
@@ -325,6 +372,7 @@ def main():
     create_dim_country_table(spark, target_table)
     close_changed_current_rows(spark, df_staging, target_table)
     insert_new_and_changed_versions(spark, df_staging, target_table)
+    validate_dim_country_table(spark, target_table)
 
     print(f"dim_country SCD2 completed. table={target_table}")
 
