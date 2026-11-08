@@ -83,6 +83,7 @@ config/
 docs/
   data_model.md
   metadata_schema.md
+  databricks_jobs.md
 
 function_app.py
 ```
@@ -177,6 +178,8 @@ Batch read of bronze snapshots, latest row per `country_cca2`, then SCD2 close +
 `sql/silver/create_dim_country.sql` is the older SQL version; leave it as reference.  
 Validate with `sql/silver/validate_dim_country.sql`.
 
+Scheduled Bronze → Silver runs are documented in [`docs/databricks_jobs.md`](docs/databricks_jobs.md) (OpenSky daily, REST Countries weekly).
+
 ### 5. Refresh gold (Databricks SQL)
 
 1. Start SQL Warehouse (e.g. `DWH_aircraft`).
@@ -213,6 +216,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
 - [x] File-level incremental processing (Auto Loader checkpoint)
 - [x] Silver staging data quality checks (OpenSky)
+- [x] Databricks Jobs orchestration (see `docs/databricks_jobs.md`)
 
 ### Planned
 
@@ -222,7 +226,6 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Integrate weather data into Gold analytics
 - [ ] Extended Gold analytical model
 - [ ] Production-quality Power BI dashboard
-- [ ] Databricks Jobs orchestration
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
 

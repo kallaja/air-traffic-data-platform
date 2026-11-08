@@ -188,7 +188,6 @@ Flow:
 
 ### Still open
 
-- Databricks Jobs
 - Delta partitioning on Silver (`snapshot_date`)
 - Auto Loader file notifications (Event Grid) on ADLS
 - Proper Gold model (current activity table is just a test / connectivity check)
