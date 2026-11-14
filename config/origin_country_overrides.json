@@ -1,0 +1,9 @@
+{
+  "_comment": "Manual OpenSky origin_country -> ISO 3166-1 alpha-2. Used when name_common / name_official auto-match is not enough.",
+  "overrides": {
+    "Viet Nam": "VN",
+    "Cape Verde": "CV",
+    "Côte d'Ivoire": "CI",
+    "Libyan Arab Jamahiriya": "LY"
+  }
+}

@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,17 @@ if load_dotenv is not None:
     except NameError:
         pass
 
+# Folder with country_cca2_mapping.py (Volume / ADLS / local).
+_code_path = os.getenv("TRANSFORMATION_CODE_PATH")
+if not _code_path:
+    raise ValueError("TRANSFORMATION_CODE_PATH must be configured.")
+sys.path.insert(0, _code_path.rstrip("/"))
+
+from country_cca2_mapping import (  # noqa: E402
+    load_origin_country_overrides,
+    with_country_cca2,
+)
+
 # Matches destination_path from ingestion metadata (relative bronze path).
 BRONZE_RELATIVE_PATH_RE = r"(source=opensky/entity=states/.*)"
 
@@ -31,6 +43,8 @@ def get_config():
     metadata_base_path = os.getenv("METADATA_BASE_PATH")
     target_table = os.getenv("SILVER_OPENSKY_TABLE")
     checkpoint_path = os.getenv("SILVER_OPENSKY_CHECKPOINT_PATH")
+    dim_country_table = os.getenv("SILVER_DIM_COUNTRY_TABLE")
+    overrides_path = os.getenv("ORIGIN_COUNTRY_OVERRIDES_PATH")
 
     if not bronze_base_path:
         raise ValueError("BRONZE_BASE_PATH must be configured.")
@@ -44,13 +58,21 @@ def get_config():
     if not checkpoint_path:
         raise ValueError("SILVER_OPENSKY_CHECKPOINT_PATH must be configured.")
 
+    if not dim_country_table:
+        raise ValueError("SILVER_DIM_COUNTRY_TABLE must be configured.")
+
+    if not overrides_path:
+        raise ValueError("ORIGIN_COUNTRY_OVERRIDES_PATH must be configured.")
+
     identifier = r"[A-Za-z_][A-Za-z0-9_]*"
-    if not re.fullmatch(
-        rf"{identifier}\.{identifier}\.{identifier}",
-        target_table,
-    ):
+    table_name_re = rf"{identifier}\.{identifier}\.{identifier}"
+    if not re.fullmatch(table_name_re, target_table):
         raise ValueError(
             "SILVER_OPENSKY_TABLE must be catalog.schema.table."
+        )
+    if not re.fullmatch(table_name_re, dim_country_table):
+        raise ValueError(
+            "SILVER_DIM_COUNTRY_TABLE must be catalog.schema.table."
         )
 
     bronze_path = (
@@ -64,6 +86,7 @@ def get_config():
     checkpoint_root = checkpoint_path.rstrip("/")
     stream_checkpoint_path = f"{checkpoint_root}/stream"
     schema_location = f"{checkpoint_root}/schema"
+    origin_overrides = load_origin_country_overrides(overrides_path)
 
     return (
         bronze_path,
@@ -71,6 +94,8 @@ def get_config():
         target_table,
         stream_checkpoint_path,
         schema_location,
+        dim_country_table,
+        origin_overrides,
     )
 
 
@@ -228,6 +253,7 @@ def build_silver_staging(
             .otherwise(F.trim("origin_country"))
             .cast("string")
             .alias("origin_country"),
+            # country_cca2 is added later via with_country_cca2(...)
             F.timestamp_seconds("time_position").alias("time_position_utc"),
             F.timestamp_seconds("last_contact").alias("last_contact_utc"),
             F.col("longitude").cast("double"),
@@ -308,6 +334,7 @@ def create_opensky_table_schema(spark, target_table):
             icao24 STRING,
             callsign STRING,
             origin_country STRING,
+            country_cca2 STRING,
             time_position_utc TIMESTAMP,
             last_contact_utc TIMESTAMP,
             longitude DOUBLE,
@@ -332,6 +359,15 @@ def create_opensky_table_schema(spark, target_table):
     )
 
 
+def ensure_country_cca2_column(spark, target_table):
+    """Add country_cca2 to an existing Delta table if the column is missing."""
+    if "country_cca2" not in spark.table(target_table).columns:
+        spark.sql(
+            f"ALTER TABLE {target_table} ADD COLUMNS (country_cca2 STRING)"
+        )
+        print(f"Added column country_cca2 to {target_table}")
+
+
 def merge_into_silver(spark, df_silver, target_table):
     target = DeltaTable.forName(spark, target_table)
     (
@@ -353,6 +389,8 @@ def process_bronze_batch(
     df_bronze_batch,
     metadata_path,
     target_table,
+    dim_country_table,
+    origin_overrides,
     transformation_run_id,
     silver_load_datetime_utc,
 ):
@@ -380,10 +418,33 @@ def process_bronze_batch(
         transformation_run_id,
         silver_load_datetime_utc,
     )
+    df_silver = with_country_cca2(
+        df_silver,
+        spark,
+        dim_country_table,
+        overrides=origin_overrides,
+    )
     df_silver = df_silver.localCheckpoint(eager=True)
     validate_silver_staging(df_silver)
 
     merge_into_silver(spark, df_silver.drop("api_time_unix"), target_table)
+
+    unmapped = (
+        df_silver.filter(
+            F.col("origin_country").isNotNull() & F.col("country_cca2").isNull()
+        )
+        .select("origin_country")
+        .distinct()
+        .limit(20)
+        .collect()
+    )
+    if unmapped:
+        names = ", ".join(row["origin_country"] for row in unmapped)
+        print(
+            "WARNING: origin_country values without country_cca2 "
+            f"(sample): {names}"
+        )
+
     print(
         "OpenSky Silver MERGE completed. "
         f"transformation_run_id={transformation_run_id}"
@@ -400,12 +461,15 @@ def main():
         target_table,
         stream_checkpoint_path,
         schema_location,
+        dim_country_table,
+        origin_overrides,
     ) = get_config()
 
     transformation_run_id = str(uuid.uuid4())
     silver_load_datetime_utc = datetime.now(timezone.utc)
 
     create_opensky_table_schema(spark, target_table)
+    ensure_country_cca2_column(spark, target_table)
 
     df_bronze_stream = read_bronze_stream(
         spark,
@@ -419,6 +483,8 @@ def main():
             df_bronze_batch,
             metadata_path,
             target_table,
+            dim_country_table,
+            origin_overrides,
             transformation_run_id,
             silver_load_datetime_utc,
         )

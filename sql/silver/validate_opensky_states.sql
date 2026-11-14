@@ -31,12 +31,30 @@ FROM silver.opensky_states
 WHERE callsign LIKE '% ';
 -- Expect: 0
 
--- 6) Sample for manual inspection
+-- 6) country_cca2 mapping coverage (soft check)
+-- Expect: unmapped_with_origin = 0 after overrides + dim match (NULL origin_country is OK).
+SELECT
+  SUM(CASE WHEN origin_country IS NOT NULL AND country_cca2 IS NULL THEN 1 ELSE 0 END)
+    AS unmapped_with_origin,
+  SUM(CASE WHEN origin_country IS NOT NULL AND country_cca2 IS NOT NULL THEN 1 ELSE 0 END)
+    AS mapped_with_origin,
+  SUM(CASE WHEN origin_country IS NULL THEN 1 ELSE 0 END) AS null_origin_country
+FROM silver.opensky_states;
+
+-- Unmapped names (should be empty; add to config/origin_country_overrides.json if not)
+SELECT DISTINCT origin_country
+FROM silver.opensky_states
+WHERE origin_country IS NOT NULL
+  AND country_cca2 IS NULL
+ORDER BY origin_country;
+
+-- 7) Sample for manual inspection
 SELECT
   snapshot_time_utc,
   icao24,
   callsign,
   origin_country,
+  country_cca2,
   latitude,
   longitude,
   baro_altitude_m,
@@ -46,8 +64,8 @@ FROM silver.opensky_states
 ORDER BY snapshot_time_utc DESC, origin_country, icao24
 LIMIT 50;
 
--- 7) Simple distribution (sanity)
-SELECT origin_country, COUNT(*) AS n
+-- 8) Simple distribution (sanity)
+SELECT origin_country, country_cca2, COUNT(*) AS n
 FROM silver.opensky_states
-GROUP BY origin_country
+GROUP BY origin_country, country_cca2
 ORDER BY n DESC;

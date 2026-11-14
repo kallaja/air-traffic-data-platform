@@ -8,10 +8,9 @@ Air traffic platform:
 bronze (ADLS / Volume JSON, hive-style folders)
   → silver.opensky_states (PySpark Auto Loader + insert-only MERGE)
   → silver.dim_country (PySpark batch + SCD Type 2)
-    → gold.opensky_activity_by_country_day (Databricks SQL, MVP)
 ```
 
-Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ mart for Power BI (MVP; expand later).
+Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ mart for Power BI.
 
 Orchestration: `docs/databricks_jobs.md`.
 
@@ -98,7 +97,8 @@ Older SQL version kept for reference: `sql/silver/create_opensky_states.sql`
 | `snapshot_time_unix` | BIGINT | root.`time` | Raw Unix `time`. |
 | `icao24` | STRING | `icao24` | ICAO 24-bit address. |
 | `callsign` | STRING | `callsign` | Trimmed; blank → null. |
-| `origin_country` | STRING | `origin_country` | Country from ICAO address. |
+| `origin_country` | STRING | `origin_country` | Country name from ICAO address (OpenSky raw). |
+| `country_cca2` | STRING | mapped | ISO alpha-2 from `origin_country` via dim_country names + `config/origin_country_overrides.json`. Logical FK to `dim_country.country_cca2`. |
 | `time_position_utc` | TIMESTAMP | `time_position` | Last position update. |
 | `last_contact_utc` | TIMESTAMP | `last_contact` | Last contact. |
 | `longitude` | DOUBLE | `longitude` | WGS-84 longitude. |
@@ -135,12 +135,14 @@ Older SQL version kept for reference: `sql/silver/create_opensky_states.sql`
 - Keep API nulls for optional fields (no invented values)
 - Auto Loader + `multiLine` JSON; skip already-seen files via checkpoint
 - Insert-only `MERGE` on `(snapshot_time_unix, icao24)`
+- Map `origin_country` → `country_cca2` (dim `name_common` / `name_official`, prefix strip, manual overrides). Keep raw `origin_country`.
 
 ### How to refresh OpenSky silver
 
-1. Configure `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH`.
-2. Run `src/transformation/transform_opensky_states.py` on a Databricks cluster.
-3. Run validation queries in `sql/silver/validate_opensky_states.sql`.
+1. Configure `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH`, `SILVER_DIM_COUNTRY_TABLE`, `ORIGIN_COUNTRY_OVERRIDES_PATH`, `TRANSFORMATION_CODE_PATH`.
+2. Run `src/transformation/transform_opensky_states.py` on a Databricks cluster (`dim_country` should already exist).
+3. One-off for existing rows: `src/transformation/backfill_opensky_country_cca2.py`.
+4. Run validation queries in `sql/silver/validate_opensky_states.sql`.
 
 ### Silver: `silver.dim_country` (implemented)
 
@@ -195,7 +197,6 @@ Flow:
 - Proper Gold model (current activity table is just a test / connectivity check)
 - Power BI dashboard (connection works; no report yet)
 - Weather Silver from Open-Meteo
-- OpenSky `origin_country` → `country_cca2` mapping
 
 ## Example (bronze → silver row)
 

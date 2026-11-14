@@ -62,6 +62,8 @@ src/
   transformation/
     transform_opensky_states.py
     transform_dim_country.py
+    country_cca2_mapping.py
+    backfill_opensky_country_cca2.py
   validation/
     validate_last_run.py
   utils/
@@ -79,6 +81,7 @@ sql/
 
 config/
   sources.yml
+  origin_country_overrides.json
 
 docs/
   data_model.md
@@ -159,10 +162,15 @@ Set these on the cluster or notebook (Databricks does not load `.env`):
 - `BRONZE_BASE_PATH`
 - `METADATA_BASE_PATH`
 - `SILVER_OPENSKY_TABLE` (`catalog.schema.table`)
+- `SILVER_DIM_COUNTRY_TABLE` (`catalog.schema.table`) — used to map `origin_country` → `country_cca2`
 - `SILVER_OPENSKY_CHECKPOINT_PATH` — separate folder per pipeline, not under bronze  
   Example: `/Volumes/workspace/default/air_traffic_data/checkpoints/opensky_states`
+- `ORIGIN_COUNTRY_OVERRIDES_PATH` — path to `config/origin_country_overrides.json`
+- `TRANSFORMATION_CODE_PATH` — folder containing `country_cca2_mapping.py` (e.g. `/Volumes/.../src` or `src/transformation`)
 
 The job uses Auto Loader (`availableNow`) for new bronze JSON files, then insert-only Delta `MERGE`.  
+Maps `origin_country` → `country_cca2` (logical FK to `dim_country`).  
+One-off backfill for existing silver rows: `src/transformation/backfill_opensky_country_cca2.py`.  
 `sql/silver/create_opensky_states.sql` is the older SQL version; leave it as reference and do not run it on the PySpark table.
 
 ### 4. Refresh dim_country (Databricks PySpark, SCD2)
@@ -211,10 +219,10 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] File-level incremental processing (Auto Loader checkpoint)
 - [x] Silver hard-fail DQ (OpenSky staging; dim_country staging + post-SCD2)
 - [x] Databricks Jobs orchestration (see `docs/databricks_jobs.md`)
+- [x] OpenSky `origin_country` → ISO `country_cca2` mapping
 
 ### Planned
 
-- [ ] OpenSky `origin_country` → ISO `country_cca2` mapping
 - [ ] Silver weather transformation
 - [ ] Define weather-to-air-traffic mapping strategy
 - [ ] Integrate weather data into Gold analytics

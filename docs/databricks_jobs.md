@@ -1,7 +1,7 @@
 # Databricks Jobs
 
 Orchestration for Bronze → Silver on Databricks.  
-Developed and scheduled on **Databricks Free Edition** (Unity Catalog Volumes). The same jobs are designed to run against **ADLS Gen2** by changing path env vars (`BRONZE_BASE_PATH`, etc.) — see `.env.example`.
+Developed and scheduled on Databricks with Unity Catalog Volumes. The same jobs are designed to run against **ADLS Gen2** by changing path env vars (`BRONZE_BASE_PATH`, etc.) — see `.env.example`.
 
 Hard-fail **data quality** lives inside the transformation scripts (`raise ValueError`), not as separate Job tasks. A failed DQ check fails the task; dependent downstream tasks are **skipped**.
 
@@ -30,7 +30,7 @@ Exact clock times are set in the Job **Schedule** (Quartz/cron), not only as a v
 | **Task 1** | Notebook / script that runs OpenSky ingest into bronze (+ metadata) on the Volume (or ADLS in Azure). |
 | **Task 2** | `src/transformation/transform_opensky_states.py` — Auto Loader + insert-only MERGE. |
 | **DQ** | Inside Task 2: ingestion metadata, bronze↔metadata coverage, silver staging (required fields, grain `(snapshot_time_unix, icao24)`, snapshot vs `api_time`). |
-| **Env / Job params** | `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH` (+ OpenSky API secrets for ingest). |
+| **Env / Job params** | `BRONZE_BASE_PATH`, `METADATA_BASE_PATH`, `SILVER_OPENSKY_TABLE`, `SILVER_DIM_COUNTRY_TABLE`, `SILVER_OPENSKY_CHECKPOINT_PATH`, `ORIGIN_COUNTRY_OVERRIDES_PATH`, `TRANSFORMATION_CODE_PATH` (+ OpenSky API secrets for ingest). |
 
 Optional manual sanity after a run: `sql/silver/validate_opensky_states.sql`.
 
@@ -61,12 +61,12 @@ Optional manual sanity: `sql/silver/validate_dim_country.sql`.
 | **Retry** | Ingest: 1 retry after 2 minutes (transient API issues). Silver: no retries — DQ / transform failures are not retried. |
 | **Downstream skip** | If ingest fails, silver does not run. |
 
-## Storage paths (Free vs Azure)
+## Storage paths (Volume vs ADLS)
 
 Same code; different prefixes:
 
-| | Free Edition (current) | Azure + ADLS Gen2 (target smoke) |
-|--|------------------------|----------------------------------|
+| | Databricks Volume (example) | Azure + ADLS Gen2 (target smoke) |
+|--|-----------------------------|-------------------------------|
 | Bronze | `/Volumes/.../bronze/` | `abfss://bronze@....dfs.core.windows.net/` |
 | Metadata | `/Volumes/.../metadata/` | `abfss://metadata@....dfs.core.windows.net/` |
 | Checkpoint (OpenSky) | `/Volumes/.../checkpoints/opensky_states` | durable path outside bronze (e.g. on metadata container) |
