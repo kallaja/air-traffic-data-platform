@@ -8,6 +8,7 @@ Air traffic platform:
 bronze (ADLS / Volume JSON, hive-style folders)
   → silver.opensky_states (PySpark Auto Loader + insert-only MERGE)
   → silver.dim_country (PySpark batch + SCD Type 2)
+  → gold.opensky_activity_by_country_day (Databricks SQL; day × country_cca2)
 ```
 
 Classic DWH analogy: bronze ≈ landing; OpenSky silver ≈ fact; dim_country ≈ SCD2 dimension; gold ≈ mart for Power BI.
@@ -190,11 +191,35 @@ Flow:
 2. Run `src/transformation/transform_dim_country.py` on a Databricks cluster (after REST Countries ingest).
 3. Run `sql/silver/validate_dim_country.sql`.
 
+### Gold: `gold.opensky_activity_by_country_day` (implemented)
+
+Daily activity mart for reporting (Power BI). Each OpenSky Job run (task 3 after silver): one SQL script rebuilds staging → hard-fail asserts → promotes the published table. If an assert fails, promote does not run and the previous published gold is left unchanged.
+
+Script: `sql/gold/create_opensky_activity_by_country_day.sql` (staging → assert → `gold.opensky_activity_by_country_day`)  
+Optional diagnostics: `sql/gold/validate_opensky_activity_by_country_day.sql` (published table)
+
+Grain: one row per `(activity_date, country_cca2)`. Missing silver `country_cca2` → `'Unknown'`. Country name/region from current `dim_country` (`is_current = true`); missing dim match → `'Unknown'`.
+
+| Column | Type (SQL) | Description |
+|--------|------------|-------------|
+| `activity_date` | DATE | `CAST(snapshot_time_utc AS DATE)`. |
+| `country_cca2` | STRING | ISO alpha-2 (or `Unknown`). |
+| `country_name` | STRING | `dim_country.name_common` (or `Unknown`). |
+| `region` | STRING | `dim_country.region` (or `Unknown`). |
+| `observation_count` | BIGINT | Rows in silver for that day × country. |
+| `distinct_aircraft` | BIGINT | Distinct `icao24`. |
+| `avg_baro_altitude_m` | DOUBLE | Average barometric altitude. |
+| `avg_velocity_ms` | DOUBLE | Average ground speed. |
+| `on_ground_count` | BIGINT | Observations with `on_ground = true`. |
+| `in_air_count` | BIGINT | Observations with `on_ground = false`. |
+| `unknown_on_ground_count` | BIGINT | Observations with `on_ground IS NULL`. |
+
+Note: multiple OpenSky ingests on the same calendar day all contribute to that day's counts (observation grain, not “one snapshot per day”).
+
 ### Still open
 
 - Delta partitioning on Silver (`snapshot_date`)
 - Auto Loader file notifications (Event Grid) on ADLS
-- Proper Gold model (current activity table is just a test / connectivity check)
 - Power BI dashboard (connection works; no report yet)
 - Weather Silver from Open-Meteo
 

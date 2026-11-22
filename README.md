@@ -22,20 +22,18 @@ OpenSky API ──────────┐
 REST Countries API ───┼──→ Python ingestion
 Open-Meteo API ───────┘          │
                                  ↓
-                         Azure Functions
-                         Timer Triggers
+              Azure Functions (timer)  and/or  Databricks Jobs
                                  │
                                  ↓
-                            ADLS Gen2
-                       Bronze + Metadata
+            Bronze + Metadata  (UC Volume now; ADLS Gen2 target)
                                  │
                                  ↓
-                    Azure Databricks (PySpark)
-         OpenSky Silver (Auto Loader) + dim_country (SCD2)
-              Databricks SQL: Gold activity marts (in progress)
+                         Databricks
+    Silver: OpenSky (Auto Loader + MERGE) + dim_country (SCD2)
+    Gold:   opensky_activity_by_country_day (SQL: staging → assert → promote)
                                  │
                                  ↓
-                         Power BI (in progress)
+                    Power BI via SQL Warehouse (report in progress)
 ```
 
 ## Technology Stack
@@ -44,12 +42,12 @@ Open-Meteo API ───────┘          │
 - **OpenSky Network API** — aircraft state vectors
 - **REST Countries API v5** — country dimension (SCD Type 2)
 - **Open-Meteo API** — daily forecast for selected European capitals
-- **Azure Data Lake Storage Gen2** — bronze + metadata containers
-- **Azure Functions** — scheduled ingestion (Flex Consumption)
-- **Azure Databricks** — OpenSky Silver (Auto Loader + MERGE) and dim_country (SCD2) in PySpark
+- **Unity Catalog Volumes / ADLS Gen2** — bronze + metadata
+- **Azure Functions** — scheduled ingestion on Azure (Flex Consumption); Databricks Jobs for bronze→silver→gold on Databricks
+- **Azure Databricks** — OpenSky Silver (Auto Loader + MERGE), dim_country (SCD2), Gold SQL mart
 - **Delta Lake** — incremental tables and SCD Type 2 history
-- **Unity Catalog** — organization of Silver and Gold data assets
-- **Power BI** — analytical reporting *(in progress)*
+- **Unity Catalog** — Silver and Gold tables
+- **Power BI** — connects to published gold via SQL Warehouse *(dashboard in progress)*
 
 ## Project Structure
 
@@ -117,9 +115,10 @@ databricks_aircraft.silver.dim_country
 databricks_aircraft.gold.opensky_activity_by_country_day
 ```
 
-OpenSky grain: one row = one aircraft (`icao24`) in one API snapshot.  
+OpenSky silver grain: one row = one aircraft (`icao24`) in one API snapshot.  
 `dim_country` natural key: `country_cca2` with SCD2 history (`valid_from` / `valid_to` / `is_current`).  
-See `docs/data_model.md`.
+Gold grain: one row per `(activity_date, country_cca2)` (missing cca2 → `Unknown`).  
+See `docs/data_model.md` and `docs/databricks_jobs.md`.
 
 ## Getting Started
 
@@ -186,7 +185,14 @@ Batch read of bronze snapshots, latest row per `country_cca2`, then SCD2 close +
 `sql/silver/create_dim_country.sql` is the older SQL version; leave it as reference.  
 Validate with `sql/silver/validate_dim_country.sql`.
 
-Scheduled Bronze → Silver runs are documented in [`docs/databricks_jobs.md`](docs/databricks_jobs.md) (OpenSky daily, REST Countries weekly).
+Scheduled Bronze → Silver → Gold runs are documented in [`docs/databricks_jobs.md`](docs/databricks_jobs.md) (OpenSky daily including gold; REST Countries weekly for dim only).
+
+### 5. Refresh gold activity mart (Databricks SQL)
+
+Run `sql/gold/create_opensky_activity_by_country_day.sql` (Job task after OpenSky silver, or manually on a SQL Warehouse).
+
+The script rebuilds `gold.opensky_activity_by_country_day_staging`, hard-fails on grain + silver reconcile (`assert_true`), then promotes to `gold.opensky_activity_by_country_day`.  
+Optional diagnostics on the published table: `sql/gold/validate_opensky_activity_by_country_day.sql`.
 
 ## Data Coverage
 
@@ -212,12 +218,13 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [x] Country dimension with SCD Type 2 history
 - [x] PySpark dim_country (SCD2 close + insert)
 - [x] Silver validation queries
-- [x] Initial Gold mart — aircraft activity by country/day
+- [x] Gold mart — daily activity by `country_cca2` (staging → assert → promote)
 - [x] Unity Catalog structure for Silver and Gold
-- [x] Power BI connectivity
+- [x] Power BI connectivity (SQL Warehouse → published gold)
 - [x] PySpark OpenSky Silver (Auto Loader + insert-only MERGE)
 - [x] File-level incremental processing (Auto Loader checkpoint)
 - [x] Silver hard-fail DQ (OpenSky staging; dim_country staging + post-SCD2)
+- [x] Gold hard-fail DQ before promote (grain + silver reconcile)
 - [x] Databricks Jobs orchestration (see `docs/databricks_jobs.md`)
 - [x] OpenSky `origin_country` → ISO `country_cca2` mapping
 
@@ -231,7 +238,7 @@ Open-Meteo MVP locations: selected European capitals listed in `config/sources.y
 - [ ] Aircraft reference data enrichment
 - [ ] Unity Catalog access-control examples
 
-> Incremental processing: OpenSky Silver uses Auto Loader plus insert-only MERGE on `(snapshot_time_unix, icao24)`. dim_country uses batch bronze read and SCD2 (close changed current rows, insert new versions). Bronze → Silver is scheduled via Databricks Jobs (see `docs/databricks_jobs.md`).
+> Incremental processing: OpenSky Silver uses Auto Loader plus insert-only MERGE on `(snapshot_time_unix, icao24)`. dim_country uses batch bronze read and SCD2. OpenSky Job also rebuilds gold (staging → assert → promote). See `docs/databricks_jobs.md`.
 
 ## License
 
